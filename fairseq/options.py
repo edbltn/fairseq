@@ -45,7 +45,6 @@ def get_generation_parser(interactive=False, default_task='translation'):
 def get_interactive_generation_parser(default_task='translation'):
     return get_generation_parser(interactive=True, default_task=default_task)
 
-
 def get_eval_lm_parser(default_task='language_modeling'):
     parser = get_parser('Evaluate Language Model', default_task)
     add_dataset_args(parser, gen=True)
@@ -420,6 +419,46 @@ def add_generation_args(parser):
                        help='strength of diversity penalty for Diverse Beam Search')
     group.add_argument('--print-alignment', action='store_true',
                        help='if set, uses attention feedback to compute and print alignment to source tokens')
+    
+    # Add multi-turn debate generation
+    group.add_argument('--multiturn', action='store_true', default=False,
+                       help='if set, generates multi-turn debate')
+    group.add_argument("--multiturnpref", metavar="FP", default=None,
+                       help="mutltiturn file prefix")
+    group.add_argument("--trainpref", metavar="FP", default=None,
+                       help="train file prefix")
+    group.add_argument("--validpref", metavar="FP", default=None,
+                       help="comma separated, valid file prefixes")
+    group.add_argument("--testpref", metavar="FP", default=None,
+                       help="comma separated, test file prefixes")
+    group.add_argument("--destdir", metavar="DIR", default="data-bin",
+                       help="destination dir")
+    group.add_argument("--thresholdtgt", metavar="N", default=0, type=int,
+                       help="map words appearing less than threshold times to unknown")
+    group.add_argument("--thresholdsrc", metavar="N", default=0, type=int,
+                       help="map words appearing less than threshold times to unknown")
+    group.add_argument("--tgtdict", metavar="FP",
+                       help="reuse given target dictionary")
+    group.add_argument("--srcdict", metavar="FP",
+                       help="reuse given source dictionary")
+    group.add_argument("--nwordstgt", metavar="N", default=-1, type=int,
+                       help="number of target words to retain")
+    group.add_argument("--nwordssrc", metavar="N", default=-1, type=int,
+                       help="number of source words to retain")
+    group.add_argument("--alignfile", metavar="ALIGN", default=None,
+                       help="an alignment file (optional)")
+    group.add_argument("--output-format", metavar="FORMAT", default="binary",
+                       choices=["binary", "raw"],
+                       help="output format (optional)")
+    group.add_argument("--joined-dictionary", action="store_true",
+                       help="Generate joined dictionary")
+    group.add_argument("--only-source", action="store_true",
+                       help="Only process the source language")
+    group.add_argument("--padding-factor", metavar="N", default=8, type=int,
+                       help="Pad dictionary size to be multiple of N")
+    group.add_argument("--workers", metavar="N", default=1, type=int,
+                       help="number of parallel workers")
+    
     # fmt: on
     return group
 

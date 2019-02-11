@@ -119,6 +119,15 @@ class TranslationTask(FairseqTask):
 
         return cls(args, src_dict, tgt_dict)
 
+    def load_multiturn_dataset(self, filepref, combine=False, **kwargs):
+        """Load a given dataset split.
+
+        """
+
+        src_datasets = []
+        tgt_datasets = []
+
+
     def load_dataset(self, split, combine=False, **kwargs):
         """Load a given dataset split.
 

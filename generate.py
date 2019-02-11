@@ -35,7 +35,11 @@ def main(args):
 
     # Load dataset splits
     task = tasks.setup_task(args)
-    task.load_dataset(args.gen_subset)
+    if args.multiturn:
+        task.load_multiturn_dataset(args.multiturnpref)
+    else:
+        task.load_dataset(args.gen_subset)
+
     print('| {} {} {} examples'.format(args.data, args.gen_subset, len(task.dataset(args.gen_subset))))
 
     # Set dictionaries
@@ -112,6 +116,10 @@ def main(args):
 
         wps_meter = TimeMeter()
         for sample_id, src_tokens, target_tokens, hypos in translations:
+
+            print(src_tokens)
+            raise
+
             # Process input and ground truth
             has_target = target_tokens is not None
             target_tokens = target_tokens.int().cpu() if has_target else None
