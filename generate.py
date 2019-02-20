@@ -33,9 +33,166 @@ def main(args):
 
     use_cuda = torch.cuda.is_available() and not args.cpu
 
+    # Set up functions for multiturn
+    def train_path(lang):
+        return "{}{}".format(args.trainpref, ("." + lang) if lang else "")
+
+    def file_name(prefix, lang):
+        fname = prefix
+        if lang is not None:
+            fname += ".{lang}".format(lang=lang)
+        return fname
+
+    def dest_path(prefix, lang):
+        return os.path.join(args.destdir, file_name(prefix, lang))
+
+    def dict_path(lang):
+        return dest_path("dict", lang) + ".txt"
+
+    def build_dictionary(filenames, src=False, tgt=False):
+        assert src ^ tgt
+        return task.build_dictionary(
+            filenames,
+            workers=args.workers,
+            threshold=args.thresholdsrc if src else args.thresholdtgt,
+            nwords=args.nwordssrc if src else args.nwordstgt,
+            padding_factor=args.padding_factor,
+        )
+
+    def make_binary_dataset(input_prefix, output_prefix, lang, num_workers):
+        dict = task.load_dictionary(dict_path(lang))
+        print("| [{}] Dictionary: {} types".format(lang, len(dict) - 1))
+        n_seq_tok = [0, 0]
+        replaced = Counter()
+
+        def merge_result(worker_result):
+            replaced.update(worker_result["replaced"])
+            n_seq_tok[0] += worker_result["nseq"]
+            n_seq_tok[1] += worker_result["ntok"]
+
+        input_file = "{}{}".format(
+            input_prefix, ("." + lang) if lang is not None else ""
+        )
+        offsets = Tokenizer.find_offsets(input_file, num_workers)
+        pool = None
+        if num_workers > 1:
+            pool = Pool(processes=num_workers - 1)
+            for worker_id in range(1, num_workers):
+                prefix = "{}{}".format(output_prefix, worker_id)
+                pool.apply_async(
+                    binarize,
+                    (
+                        args,
+                        input_file,
+                        dict,
+                        prefix,
+                        lang,
+                        offsets[worker_id],
+                        offsets[worker_id + 1],
+                    ),
+                    callback=merge_result,
+                )
+            pool.close()
+
+        ds = indexed_dataset.IndexedDatasetBuilder(
+            dataset_dest_file(args, output_prefix, lang, "bin")
+        )
+        merge_result(
+            Tokenizer.binarize(
+                input_file, dict, lambda t: ds.add_item(t), offset=0, end=offsets[1]
+            )
+        )
+        if num_workers > 1:
+            pool.join()
+            for worker_id in range(1, num_workers):
+                prefix = "{}{}".format(output_prefix, worker_id)
+                temp_file_path = dataset_dest_prefix(args, prefix, lang)
+                ds.merge_file_(temp_file_path)
+                os.remove(indexed_dataset.data_file_path(temp_file_path))
+                os.remove(indexed_dataset.index_file_path(temp_file_path))
+
+        ds.finalize(dataset_dest_file(args, output_prefix, lang, "idx"))
+
+        print(
+            "| [{}] {}: {} sents, {} tokens, {:.3}% replaced by {}".format(
+                lang,
+                input_file,
+                n_seq_tok[0],
+                n_seq_tok[1],
+                100 * sum(replaced.values()) / n_seq_tok[1],
+                dict.unk_word,
+            )
+        )
+
+    def make_dataset(input_prefix, output_prefix, lang, num_workers=1):
+        if args.output_format == "binary":
+            make_binary_dataset(input_prefix, output_prefix, lang, num_workers)
+        elif args.output_format == "raw":
+            # Copy original text file to destination folder
+            output_text_file = dest_path(
+                output_prefix + ".{}-{}".format(args.source_lang, args.target_lang),
+                lang,
+            )
+            shutil.copyfile(file_name(input_prefix, lang), output_text_file)
+
+    def make_all(lang):
+        if args.trainpref:
+            make_dataset(args.trainpref, "train", lang, num_workers=args.workers)
+        if args.validpref:
+            for k, validpref in enumerate(args.validpref.split(",")):
+                outprefix = "valid{}".format(k) if k > 0 else "valid"
+                make_dataset(validpref, outprefix, lang)
+        if args.testpref:
+            for k, testpref in enumerate(args.testpref.split(",")):
+                outprefix = "test{}".format(k) if k > 0 else "test"
+                make_dataset(testpref, outprefix, lang)
+
     # Load dataset splits
     task = tasks.setup_task(args)
     if args.multiturn:
+        if args.joined_dictionary:
+            assert (
+                    not args.srcdict or not args.tgtdict
+            ), "cannot use both --srcdict and --tgtdict with --joined-dictionary"
+
+            if args.srcdict:
+                src_dict = task.load_dictionary(args.srcdict)
+            elif args.tgtdict:
+                src_dict = task.load_dictionary(args.tgtdict)
+            else:
+                assert (
+                    args.trainpref
+                ), "--trainpref must be set if --srcdict is not specified"
+                src_dict = build_dictionary({train_path(lang) for lang in [args.source_lang, args.target_lang]}, src=True)
+            tgt_dict = src_dict
+        else:
+            if args.srcdict:
+                src_dict = task.load_dictionary(args.srcdict)
+            else:
+                assert (
+                    args.trainpref
+                ), "--trainpref must be set if --srcdict is not specified"
+                src_dict = build_dictionary([train_path(args.source_lang)], src=True)
+
+            if target:
+                if args.tgtdict:
+                    tgt_dict = task.load_dictionary(args.tgtdict)
+                else:
+                    assert (
+                        args.trainpref
+                    ), "--trainpref must be set if --tgtdict is not specified"
+                    tgt_dict = build_dictionary([train_path(args.target_lang)], tgt=True)
+            else:
+                tgt_dict = None
+
+        src_dict.save(dict_path(args.source_lang))
+        if target and tgt_dict is not None:
+            tgt_dict.save(dict_path(args.target_lang))
+        make_all(args.source_lang)
+        if target:
+            make_all(args.target_lang)
+
+        print("| Wrote preprocessed data to {}".format(args.destdir))
         task.load_multiturn_dataset(args.multiturnpref)
     else:
         task.load_dataset(args.gen_subset)
